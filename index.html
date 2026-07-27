@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>FireTracker Live</title>
+    <!-- Lien vers le Manifest PWA -->
+    <link rel="manifest" href="manifest.json">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+    <style>
+        body, html { margin: 0; padding: 0; height: 100%; font-family: sans-serif; background-color: #000;}
+        #map { height: 100vh; width: 100vw; z-index: 1; }
+        .control-panel {
+            position: absolute; bottom: 0; left: 0; z-index: 1000; width: 100%;
+            background: rgba(255, 255, 255, 0.95); padding: 20px; box-sizing: border-box;
+            border-radius: 20px 20px 0 0; box-shadow: 0 -4px 15px rgba(0,0,0,0.3);
+        }
+        button { width: 100%; padding: 15px; font-size: 16px; background-color: #d32f2f; color: white; border: none; border-radius: 8px; font-weight: bold; }
+        #loading { display: none; color: #d32f2f; font-weight: bold; text-align: center; margin-top: 10px; }
+        .leaflet-control-zoom { display: none; }
+    </style>
+</head>
+<body>
+    <div class="control-panel">
+        <h3 style="margin-top:0; color:#d32f2f; text-align:center;">🔥 FireTracker (Europe)</h3>
+        <button id="scanBtn">Actualiser la carte</button>
+        <div id="loading">Connexion au serveur...</div>
+    </div>
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+    <script>
+        // Activation du Service Worker pour la PWA
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('sw.js');
+        }
+
+        const map = L.map('map', { zoomControl: false }).setView([43.5, 4.0], 5);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+        let fireLayerGroup = L.layerGroup().addTo(map);
+        const canvasRenderer = L.canvas({ padding: 0.5 });
+
+        // IMPORTANT : REMPLACEZ CETTE URL PAR CELLE FOURNIE PAR RENDER
+        const RENDER_API_URL = 'https://firetracker-api-5ohf.onrender.com';
+
+        document.getElementById('scanBtn').addEventListener('click', async () => {
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('scanBtn').disabled = true;
+            fireLayerGroup.clearLayers();
+
+            try {
+                const response = await fetch(RENDER_API_URL);
+                if (!response.ok) throw new Error("Erreur serveur");
+                const donnees = await response.json();
+
+                // 1. Affichage ultra-rapide des points
+                donnees.points.forEach(pt => {
+                    L.circleMarker([pt.lat, pt.lon], {
+                        renderer: canvasRenderer, radius: 4, color: 'transparent', fillColor: '#ff3d00', fillOpacity: 0.5
+                    }).addTo(fireLayerGroup);
+                });
+
+                // 2. Affichage instantané des zones rouges pré-calculées
+                donnees.polygons.forEach(poly => {
+                    L.geoJSON(poly, {
+                        style: { color: '#b71c1c', weight: 1, fillColor: '#d32f2f', fillOpacity: 0.3 }
+                    }).addTo(fireLayerGroup);
+                });
+
+            } catch (error) {
+                alert("Erreur de connexion. Le serveur Render est peut-être en train de s'allumer (cela prend 30 secondes). Réessayez !");
+            } finally {
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('scanBtn').disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>
