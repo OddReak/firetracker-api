@@ -4,76 +4,308 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>FireTracker Live</title>
-    <!-- Lien vers le Manifest PWA -->
-    <link rel="manifest" href="manifest.json">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
     <style>
-        body, html { margin: 0; padding: 0; height: 100%; font-family: sans-serif; background-color: #000;}
+        body, html { margin: 0; padding: 0; height: 100%; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #111;}
         #map { height: 100vh; width: 100vw; z-index: 1; }
-        .control-panel {
-            position: absolute; bottom: 0; left: 0; z-index: 1000; width: 100%;
-            background: rgba(255, 255, 255, 0.95); padding: 20px; box-sizing: border-box;
-            border-radius: 20px 20px 0 0; box-shadow: 0 -4px 15px rgba(0,0,0,0.3);
+        
+        #brandLogo { 
+            position: absolute; top: 20px; left: 15px; z-index: 1000; 
+            color: #ff5722; font-weight: 800; font-size: 18px; 
+            text-shadow: 0 2px 4px rgba(0,0,0,0.8); pointer-events: none; 
         }
-        button { width: 100%; padding: 15px; font-size: 16px; background-color: #d32f2f; color: white; border: none; border-radius: 8px; font-weight: bold; }
-        #loading { display: none; color: #d32f2f; font-weight: bold; text-align: center; margin-top: 10px; }
+
+        #scanBtn {
+            position: absolute; top: 30px; left: 50%; transform: translateX(-50%); z-index: 1000;
+            padding: 10px 22px; font-size: 14px; font-weight: bold; cursor: pointer;
+            background-color: #ff5722; color: white; border: none; border-radius: 30px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+            transition: background 0.2s, transform 0.1s; white-space: nowrap;
+        }
+        #scanBtn:active { transform: translateX(-50%) scale(0.95); }
+        #scanBtn:disabled { background-color: #555; color: #888; cursor: not-allowed; box-shadow: none; }
+
+        .bottom-bar {
+            position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 1000;
+            width: calc(100% - 30px); max-width: 450px;
+            background: rgba(30, 30, 30, 0.85); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 20px;
+            padding: 15px; box-sizing: border-box; box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+            display: flex; flex-direction: column; gap: 10px;
+        }
+
+        .info-row { display: flex; justify-content: space-between; align-items: center; width: 100%; }
+        #timeDisplay { font-size: 13px; color: #ffeb3b; font-weight: bold; }
+        #weatherWidget { display: none; font-size: 13px; color: #81d4fa; font-weight: bold; text-align: right; }
+        #windArrow { display: inline-block; transition: transform 0.5s ease-in-out; margin-left: 4px; }
+
+        .slider-container { width: 100%; }
+        #timeSlider { width: 100%; cursor: pointer; height: 15px; accent-color: #ff5722; margin: 0;}
+        
+        #loading { 
+            position:absolute; top: 20px; left: 50%; transform: translateX(-50%); z-index: 2000; 
+            background: rgba(255, 87, 34, 0.9); backdrop-filter: blur(5px); color: white; 
+            padding: 8px 20px; border-radius: 20px; font-weight: bold; font-size: 14px;
+            display: none; box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+        }
+        
         .leaflet-control-zoom { display: none; }
+
+        .plane-icon { font-size: 24px; text-align: center; line-height: 24px; filter: drop-shadow(0px 0px 4px rgba(0,0,0,0.8)); }
+        .plane-label { background: rgba(0,0,0,0.7); color: #00e5ff; border: 1px solid #00e5ff; border-radius: 4px; padding: 2px 6px; font-size: 10px; font-weight: bold; white-space: nowrap; }
+
+        /* --- ANIMATION DES PARTICULES DE VENT --- */
+        .wind-particle-icon { pointer-events: none !important; }
+        .wind-wrapper { width: 60px; height: 60px; display: flex; align-items: center; justify-content: center; }
+        .wind-particle-track { width: 100%; height: 2px; position: relative; }
+        .wind-particle {
+            position: absolute; top: 0; left: 0; width: 15px; height: 2px;
+            background: rgba(129, 212, 250, 0.6); border-radius: 2px;
+            box-shadow: 0 0 6px rgba(129, 212, 250, 0.9);
+            animation: fly linear infinite;
+        }
+        @keyframes fly {
+            0% { left: 0%; opacity: 0; }
+            20% { opacity: 1; }
+            80% { opacity: 1; }
+            100% { left: 100%; opacity: 0; }
+        }
     </style>
 </head>
 <body>
-    <div class="control-panel">
-        <h3 style="margin-top:0; color:#d32f2f; text-align:center;">🔥 FireTracker (Europe)</h3>
-        <button id="scanBtn">Actualiser la carte</button>
-        <div id="loading">Connexion au serveur...</div>
+    <div id="brandLogo">🔥 FireTracker</div>
+    <div id="loading">Scan en cours...</div>
+    
+    <button id="scanBtn">🔍 Scanner la zone</button>
+    
+    <div class="bottom-bar">
+        <div class="info-row">
+            <div id="timeDisplay">En attente de scan...</div>
+            <div id="weatherWidget">
+                💨 <span id="windSpeed">0</span> km/h 
+                <div id="windArrow">⬇</div>
+            </div>
+        </div>
+        <div class="slider-container">
+            <input type="range" id="timeSlider" min="0" max="72" value="72" step="1" disabled>
+        </div>
     </div>
+    
     <div id="map"></div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+    <script src="https://cdn.jsdelivr.net/npm/@turf/turf@7.1.0/turf.min.js"></script>
     <script>
-        // Activation du Service Worker pour la PWA
-        if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('sw.js');
+        const map = L.map('map', { zoomControl: false }).setView([43.5, 4.0], 5);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { 
+            maxZoom: 19, attribution: '© CartoDB'
+        }).addTo(map);
+        
+        let fireLayerGroup = L.layerGroup().addTo(map);
+        let planesLayerGroup = L.layerGroup().addTo(map);
+        let windLayerGroup = L.layerGroup().addTo(map); // Nouveau calque pour l'animation du vent
+        const canvasRenderer = L.canvas({ padding: 0.5 });
+        
+        let globalPoints = [];
+        let timeSteps = []; 
+        let currentBoundsQuery = ""; 
+        let radarInterval;
+
+        function generateTimeSteps() {
+            const now = new Date();
+            let steps = [];
+            for(let i = 0; i <= 72; i++) {
+                if (i === 72) { steps[i] = now.getTime(); } 
+                else {
+                    let d = new Date(now);
+                    d.setHours(now.getHours() - (72 - 1 - i), 0, 0, 0);
+                    steps[i] = d.getTime();
+                }
+            }
+            return steps;
         }
 
-        const map = L.map('map', { zoomControl: false }).setView([43.5, 4.0], 5);
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
-        let fireLayerGroup = L.layerGroup().addTo(map);
-        const canvasRenderer = L.canvas({ padding: 0.5 });
+        async function fetchWind(w, s, e, n) {
+            try {
+                // On demande la grille entière à notre serveur
+                const response = await fetch(`/api/vent?w=${w}&s=${s}&e=${e}&n=${n}`);
+                const data = await response.json();
+                
+                // 1. Mise à jour du petit widget texte (vent moyen au centre)
+                if (data && data.center && data.center.windspeed !== undefined) {
+                    document.getElementById('weatherWidget').style.display = 'block';
+                    document.getElementById('windSpeed').innerText = Math.round(data.center.windspeed);
+                    document.getElementById('windArrow').style.transform = `rotate(${data.center.winddirection}deg)`;
+                }
 
-        // IMPORTANT : REMPLACEZ CETTE URL PAR CELLE FOURNIE PAR RENDER
-        const RENDER_API_URL = 'https://firetracker-api-5ohf.onrender.com';
+                // 2. Génération des particules d'animation sur la grille
+                windLayerGroup.clearLayers();
+                if (data && data.grid) {
+                    data.grid.forEach(pt => {
+                        if (pt.weather && pt.weather.windspeed > 0) {
+                            // Calcul de la vitesse d'animation (Vent fort = particules très rapides)
+                            let duration = 40 / pt.weather.windspeed;
+                            duration = Math.max(0.6, Math.min(4, duration)).toFixed(2); // Restreint entre 0.6s et 4s
+                            
+                            // Un petit décalage aléatoire pour que les particules ne clignotent pas toutes en même temps
+                            let delay = (Math.random() * 2).toFixed(2);
+
+                            const icon = L.divIcon({
+                                className: 'wind-particle-icon',
+                                html: `<div class="wind-wrapper" style="transform: rotate(${pt.weather.winddirection}deg);">
+                                        <div class="wind-particle-track">
+                                            <div class="wind-particle" style="animation-duration: ${duration}s; animation-delay: ${delay}s;"></div>
+                                        </div>
+                                       </div>`,
+                                iconSize: [60, 60],
+                                iconAnchor: [30, 30]
+                            });
+                            
+                            L.marker([pt.lat, pt.lon], { icon: icon, interactive: false }).addTo(windLayerGroup);
+                        }
+                    });
+                }
+            } catch (e) {
+                console.log("Météo indisponible");
+            }
+        }
 
         document.getElementById('scanBtn').addEventListener('click', async () => {
+            const bounds = map.getBounds();
+            const sw = bounds.getSouthWest().wrap();
+            const ne = bounds.getNorthEast().wrap();
+
+            let w = sw.lng.toFixed(2);
+            let s = Math.max(-90, sw.lat).toFixed(2);
+            let e = ne.lng.toFixed(2);
+            let n = Math.min(90, ne.lat).toFixed(2);
+
+            if ((Math.abs(ne.lng - sw.lng)) > 100 || (Math.abs(n - s)) > 100) {
+                return alert("La zone est trop vaste. Veuillez zoomer davantage.");
+            }
+
+            currentBoundsQuery = `?w=${w}&s=${s}&e=${e}&n=${n}`;
+
             document.getElementById('loading').style.display = 'block';
             document.getElementById('scanBtn').disabled = true;
-            fireLayerGroup.clearLayers();
-
+            timeSteps = generateTimeSteps();
+            
             try {
-                const response = await fetch(RENDER_API_URL);
-                if (!response.ok) throw new Error("Erreur serveur");
+                // On passe maintenant les coordonnées à la fonction vent pour le champ dynamique
+                fetchWind(w, s, e, n);
+
+                const response = await fetch(`/api/feux${currentBoundsQuery}`);
+                if (!response.ok) throw new Error("Erreur");
                 const donnees = await response.json();
+                globalPoints = donnees.points;
 
-                // 1. Affichage ultra-rapide des points
-                donnees.points.forEach(pt => {
-                    L.circleMarker([pt.lat, pt.lon], {
-                        renderer: canvasRenderer, radius: 4, color: 'transparent', fillColor: '#ff3d00', fillOpacity: 0.5
-                    }).addTo(fireLayerGroup);
-                });
+                const slider = document.getElementById('timeSlider');
+                slider.disabled = false;
+                slider.value = 72;
+                renderMap(72);
 
-                // 2. Affichage instantané des zones rouges pré-calculées
-                donnees.polygons.forEach(poly => {
-                    L.geoJSON(poly, {
-                        style: { color: '#b71c1c', weight: 1, fillColor: '#d32f2f', fillOpacity: 0.3 }
-                    }).addTo(fireLayerGroup);
-                });
+                fetchPlanes();
+                clearInterval(radarInterval);
+                radarInterval = setInterval(fetchPlanes, 10000);
 
             } catch (error) {
-                alert("Erreur de connexion. Le serveur Render est peut-être en train de s'allumer (cela prend 30 secondes). Réessayez !");
+                document.getElementById('timeDisplay').innerText = "Erreur de connexion";
             } finally {
                 document.getElementById('loading').style.display = 'none';
                 document.getElementById('scanBtn').disabled = false;
             }
         });
+
+        let debounceTimer;
+        const slider = document.getElementById('timeSlider');
+        const timeDisplay = document.getElementById('timeDisplay');
+
+        slider.addEventListener('input', (e) => {
+            const stepIndex = parseInt(e.target.value);
+            
+            if (stepIndex === 72) {
+                timeDisplay.innerText = "Maintenant";
+            } else {
+                const d = new Date(timeSteps[stepIndex]);
+                const timeStr = d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                timeDisplay.innerText = `${timeStr} - ${d.toLocaleDateString()}`;
+            }
+            
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => { renderMap(stepIndex); }, 150);
+        });
+
+        function renderMap(stepIndex) {
+            fireLayerGroup.clearLayers();
+            const cutoffTime = timeSteps[stepIndex];
+            
+            if(timeDisplay.innerText === "En attente de scan...") {
+                timeDisplay.innerText = "Maintenant";
+            }
+
+            let activePointsForTurf = [];
+
+            globalPoints.forEach(pt => {
+                if(pt.ts <= cutoffTime) {
+                    activePointsForTurf.push(turf.point([pt.lon, pt.lat]));
+                    L.circleMarker([pt.lat, pt.lon], {
+                        renderer: canvasRenderer, radius: 7, stroke: false, fillColor: '#ff2a00', fillOpacity: 0.25        
+                    }).addTo(fireLayerGroup);
+                }
+            });
+
+            if (activePointsForTurf.length > 1) {
+                const featureCollection = turf.featureCollection(activePointsForTurf);
+                const clustered = turf.clustersDbscan(featureCollection, 6, {units: 'kilometers', minPoints: 2});
+                let clusterGroups = {};
+                turf.featureEach(clustered, function (f) {
+                    if (f.properties.cluster !== undefined) {
+                        if (!clusterGroups[f.properties.cluster]) clusterGroups[f.properties.cluster] = [];
+                        clusterGroups[f.properties.cluster].push(f);
+                    }
+                });
+
+                for (let id in clusterGroups) {
+                    const hull = turf.convex(turf.featureCollection(clusterGroups[id]));
+                    if (hull) {
+                        L.geoJSON(hull, {
+                            style: { color: '#ffeb3b', weight: 2, fillColor: 'transparent', dashArray: '5, 5' },
+                            interactive: false
+                        }).addTo(fireLayerGroup);
+                    }
+                }
+            }
+        }
+
+        async function fetchPlanes() {
+            if (!currentBoundsQuery) return;
+            try {
+                const response = await fetch(`/api/avions${currentBoundsQuery}`);
+                if (!response.ok) return;
+                const planes = await response.json();
+                
+                planesLayerGroup.clearLayers();
+
+                planes.forEach(plane => {
+                    if (plane.lat && plane.lon) {
+                        const rotation = plane.heading ? plane.heading : 0;
+                        const icon = L.divIcon({
+                            html: `<div style="transform: rotate(${rotation}deg);">✈️</div>`,
+                            className: 'plane-icon',
+                            iconSize: [24, 24],
+                            iconAnchor: [12, 12]
+                        });
+
+                        const marker = L.marker([plane.lat, plane.lon], { icon: icon }).addTo(planesLayerGroup);
+                        marker.bindTooltip(`${plane.callsign} <br> Alt: ${Math.round(plane.alt)}m`, {
+                            permanent: true, direction: 'right', className: 'plane-label', offset: [10, 0]
+                        });
+                    }
+                });
+            } catch (error) {
+                console.log("Radar indisponible.");
+            }
+        }
     </script>
 </body>
 </html>
