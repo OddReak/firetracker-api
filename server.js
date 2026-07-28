@@ -1,53 +1,42 @@
-const express = require('express');
-const axios = require('axios');
-const cors = require('cors');
-const turf = require('@turf/turf');
+import express from 'express';
+import axios from 'axios';
+import * as turf from '@turf/turf';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
-app.use(cors()); // Autorise votre application mobile à interroger ce serveur
-
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 const NASA_API_KEY = process.env.NASA_API_KEY;
 
-// Mémoire locale du serveur
-let cache = {
-    data: { points: [], polygons: [] },
-    lastFetch: 0
-};
+app.use(express.static('public'));
 
-// Limite de validité du cache (30 minutes)
+let cacheFeux = {}; 
 const CACHE_DURATION = 30 * 60 * 1000; 
 
-app.get('/api/feux-en-direct', async (req, res) => {
-    // 1. SI LE CACHE EST RÉCENT, ON RÉPOND INSTANTANÉMENT
-    if (Date.now() - cache.lastFetch < CACHE_DURATION && cache.data.points.length > 0) {
-        console.log("Données servies depuis le cache !");
-        return res.json(cache.data);
+// --- ROUTE : FEUX ---
+app.get('/api/feux', async (req, res) => {
+    const { w, s, e, n } = req.query;
+    if (!w || !s || !e || !n) return res.status(400).json({ error: "Coordonnées manquantes" });
+    if (!NASA_API_KEY) return res.status(500).json({ error: "Clé API manquante" });
+
+    const cacheKey = `${w},${s},${e},${n}`;
+    if (cacheFeux[cacheKey] && (Date.now() - cacheFeux[cacheKey].lastFetch < CACHE_DURATION)) {
+        return res.json(cacheFeux[cacheKey].data);
     }
 
-    // 2. SINON, ON CALCULE TOUT (Prend quelques secondes)
-    console.log("Cache expiré, téléchargement depuis la NASA...");
-    if (!NASA_API_KEY) {
-        return res.status(500).json({ error: "Clé API NASA manquante sur le serveur." });
-    }
-
-    // Coordonnées de l'Europe/Afrique du Nord (À modifier si vous voulez le monde entier, mais attention à la limite 100x100 de la NASA)
-    const w = -20, s = 30, e = 30, n = 60; 
     const sources = ['VIIRS_SNPP_NRT', 'VIIRS_NOAA20_NRT', 'MODIS_NRT'];
-    const MS_PER_HOUR = 60 * 60 * 1000;
-    const now = Date.now();
-    const startTime = now - (72 * MS_PER_HOUR); // 72 heures
-    
+    const startTime = Date.now() - (73 * 60 * 60 * 1000);
     let allPoints = [];
 
     try {
         const fetchPromises = sources.map(source => 
-            axios.get(`https://firms.modaps.eosdis.nasa.gov/api/area/csv/${NASA_API_KEY}/${source}/${w},${s},${e},${n}/3`)
+            axios.get(`https://firms.modaps.eosdis.nasa.gov/api/area/csv/${NASA_API_KEY}/${source}/${w},${s},${e},${n}/4`)
         );
-        
         const results = await Promise.all(fetchPromises);
         
-        // Parse CSV
         results.forEach(response => {
             const lines = response.data.split(/\r?\n/);
             if (lines.length < 2) return;
@@ -62,47 +51,98 @@ app.get('/api/feux-en-direct', async (req, res) => {
                 const cols = lines[i].split(',');
                 const lat = parseFloat(cols[latIdx]);
                 const lon = parseFloat(cols[lonIdx]);
-                const timestamp = new Date(`${cols[dateIdx]}T${cols[timeIdx].padStart(4, '0').substring(0,2)}:${cols[timeIdx].padStart(4, '0').substring(2,4)}:00Z`).getTime();
+                const timeStr = cols[timeIdx].padStart(4, '0');
+                const timestamp = new Date(`${cols[dateIdx]}T${timeStr.substring(0,2)}:${timeStr.substring(2,4)}:00Z`).getTime();
 
-                if (!isNaN(lat) && !isNaN(lon) && timestamp >= startTime && timestamp <= now) {
-                    allPoints.push({ lat, lon, timestamp });
+                if (!isNaN(lat) && !isNaN(lon) && timestamp >= startTime) {
+                    allPoints.push({ lat, lon, ts: timestamp });
                 }
             }
         });
 
-        // Calcul lourd Turf.js
-        let polygons = [];
-        if (allPoints.length > 0) {
-            const turfPoints = allPoints.map(pt => turf.point([pt.lon, pt.lat]));
-            const featureCollection = turf.featureCollection(turfPoints);
-            const clustered = turf.clustersDbscan(featureCollection, 8, {units: 'kilometers', minPoints: 2});
-            
-            let clusterGroups = {};
-            turf.featureEach(clustered, function (feature) {
-                const clusterId = feature.properties.cluster;
-                if (clusterId !== undefined) {
-                    if (!clusterGroups[clusterId]) clusterGroups[clusterId] = [];
-                    clusterGroups[clusterId].push(feature);
-                }
-            });
+        cacheFeux[cacheKey] = { data: { points: allPoints }, lastFetch: Date.now() };
+        res.json(cacheFeux[cacheKey].data);
+    } catch (error) {
+        res.status(500).json({ error: "Erreur NASA" });
+    }
+});
 
-            for (let id in clusterGroups) {
-                const fc = turf.featureCollection(clusterGroups[id]);
-                const hull = turf.convex(fc);
-                if (hull) polygons.push(hull);
+// --- ROUTE : RADAR AVIONS ---
+app.get('/api/avions', async (req, res) => {
+    const { w, s, e, n } = req.query;
+    if (!w || !s || !e || !n) return res.json([]);
+
+    try {
+        const response = await axios.get(`https://opensky-network.org/api/states/all?lamin=${s}&lomin=${w}&lamax=${n}&lomax=${e}`);
+        const states = response.data.states || [];
+        
+        const firePlanes = states.filter(state => {
+            const callsign = (state[1] || '').trim().toUpperCase();
+            return callsign.includes('PELICAN') || callsign.includes('MILAN') || callsign.includes('BENGAL');
+        }).map(state => ({
+            id: state[0],
+            callsign: (state[1] || '').trim(),
+            lon: state[5],
+            lat: state[6],
+            alt: state[7],
+            velocity: state[9],
+            heading: state[10]
+        }));
+        
+        res.json(firePlanes);
+    } catch (error) {
+        res.status(500).json({ error: "Impossible de récupérer les vols" });
+    }
+});
+
+// --- ROUTE : MÉTÉO (CHAMP DE VENT DYNAMIQUE) ---
+app.get('/api/vent', async (req, res) => {
+    const { w, s, e, n } = req.query;
+    if (!w || !s || !e || !n) return res.json(null);
+    
+    try {
+        const lats = [];
+        const lons = [];
+        
+        // 1. Point central (pour le widget texte en bas)
+        const centerLat = (parseFloat(s) + parseFloat(n)) / 2;
+        const centerLon = (parseFloat(w) + parseFloat(e)) / 2;
+        lats.push(centerLat.toFixed(2));
+        lons.push(centerLon.toFixed(2));
+        
+        // 2. Grille de 25 points (5x5) pour les particules d'animation
+        const latStep = (parseFloat(n) - parseFloat(s)) / 4;
+        const lonStep = (parseFloat(e) - parseFloat(w)) / 4;
+        for(let i = 0; i <= 4; i++) {
+            for(let j = 0; j <= 4; j++) {
+                lats.push((parseFloat(s) + i*latStep).toFixed(2));
+                lons.push((parseFloat(w) + j*lonStep).toFixed(2));
             }
         }
-
-        // 3. MISE À JOUR DU CACHE ET RÉPONSE
-        cache.data = { points: allPoints, polygons: polygons };
-        cache.lastFetch = Date.now();
         
-        res.json(cache.data);
-
+        // Open-Meteo permet d'envoyer un tableau de coordonnées en une seule requête
+        const response = await axios.get(`https://api.open-meteo.com/v1/forecast?latitude=${lats.join(',')}&longitude=${lons.join(',')}&current_weather=true`);
+        const results = response.data;
+        
+        if (Array.isArray(results)) {
+            const centerWeather = results[0].current_weather;
+            const grid = results.slice(1).map((r, idx) => ({
+                lat: lats[idx+1],
+                lon: lons[idx+1],
+                weather: r.current_weather
+            }));
+            res.json({ center: centerWeather, grid: grid });
+        } else {
+            // Sécurité si une seule coordonnée est exceptionnellement renvoyée
+            res.json({ center: results.current_weather, grid: [] });
+        }
     } catch (error) {
-        console.error("Erreur serveur :", error.message);
-        res.status(500).json({ error: "Erreur lors de la récupération des données NASA." });
+        res.status(500).json({ error: "Erreur météo" });
     }
+});
+
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 app.listen(PORT, () => console.log(`Serveur prêt sur le port ${PORT}`));
