@@ -150,10 +150,13 @@
                             
                             // Un petit décalage aléatoire pour que les particules ne clignotent pas toutes en même temps
                             let delay = (Math.random() * 2).toFixed(2);
+                            
+                            // Calcul de la bonne direction (CSS part de la droite, la météo vient de son point d'origine)
+                            const cssRotation = (pt.weather.winddirection + 90) % 360;
 
                             const icon = L.divIcon({
                                 className: 'wind-particle-icon',
-                                html: `<div class="wind-wrapper" style="transform: rotate(${pt.weather.winddirection}deg);">
+                                html: `<div class="wind-wrapper" style="transform: rotate(${cssRotation}deg);">
                                         <div class="wind-particle-track">
                                             <div class="wind-particle" style="animation-duration: ${duration}s; animation-delay: ${delay}s;"></div>
                                         </div>
@@ -163,6 +166,7 @@
                             });
                             
                             L.marker([pt.lat, pt.lon], { icon: icon, interactive: false }).addTo(windLayerGroup);
+
                         }
                     });
                 }
